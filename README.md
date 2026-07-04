@@ -1,9 +1,14 @@
-# Goyfriends
+# Goyfriends 🐸
 
 A small, invite-only, end-to-end encrypted group chat. iMessage-like, built as
 a vanilla HTML/CSS/JS PWA — no build step, no framework. Message content and
 attachments are encrypted client-side; the server (Supabase) only ever stores
 ciphertext.
+
+Features: bubbles with reply-quotes and tapback reactions, group naming/photos
+(editable by any member), push notifications, typing indicators, opt-in read
+receipts (off by default), message edit/unsend, pinned/muted conversations,
+profile photos/avatars, key backup/restore, WebAuthn quick-unlock.
 
 ## Security model — read this before inviting anyone
 
@@ -21,6 +26,16 @@ metadata):
 - Reactions (tapbacks)
 - Timestamps, sender identity, who's in which conversation
 - Attachment size (inherently visible from the ciphertext blob size anyway)
+- Whether a message was edited/unsent (the content itself stays encrypted;
+  unsending just stops the client from ever rendering that row again)
+- Read receipts, if you turn them on (off by default — see below) and pin/mute state
+- Typing indicators (never stored — a live broadcast only, gone the instant
+  everyone leaves the conversation)
+
+**Push notification previews are always generic** — "so-and-so sent a
+message," never the actual text. The server-side function that sends push
+notifications has no way to decrypt your messages, so it physically cannot
+put message content in a notification even if it wanted to.
 
 **Not provided:**
 - Per-message forward secrecy. Each conversation uses one static symmetric key
@@ -57,8 +72,23 @@ metadata):
 6. Storage — create two buckets:
    - `avatars`
    - `attachments`
-7. SQL Editor — run `supabase/migrations/0001_init.sql`, then
-   `supabase/migrations/0002_rls.sql`, in that order.
+7. SQL Editor — run, in order: `supabase/migrations/0001_init.sql`,
+   `0002_rls.sql`, `0003_v2_features.sql`.
+8. **Push notifications** — generate a VAPID keypair (any Web Push VAPID
+   generator, or Node: `crypto.createECDH('prime256v1')`, base64url-encode
+   the public/private keys). Then:
+   - Update the hardcoded `vapidPublicKey` in both
+     `supabase/functions/notify-message/index.ts` and `js/config.js`
+     (`VAPID_PUBLIC_KEY`) to your new public key.
+   - Store the private key in Vault via SQL Editor:
+     `select vault.create_secret('<your private key>', 'vapid_private_key', '...');`
+   - Deploy the Edge Function: `supabase functions deploy notify-message --no-verify-jwt`
+     (or via the dashboard's Edge Functions UI, uploading `supabase/functions/notify-message/index.ts`,
+     with "Verify JWT" turned **off** — this function authenticates via a
+     Vault-stored shared secret checked against the `x-webhook-secret`
+     header, not a user JWT).
+   - Update the project URL hardcoded in `notify_new_message()` inside
+     `0003_v2_features.sql` if you're forking this to a different project.
 
 ### 2. Netlify site
 1. Log into your existing Netlify account (no new account needed — a new
@@ -105,9 +135,14 @@ Open the served URL in a browser. There's nothing to build or bundle.
   here is a confidentiality bug — keep changes small and test them.
 - `js/db/` — Supabase queries, grouped by table/concern.
 - `js/ui/` — vanilla-JS render functions, one per screen/component.
+- `js/push.js` — Web Push subscribe/unsubscribe (this browser only).
+- `js/typing.js` — ephemeral typing-indicator broadcast, never touches the database.
 - `js/vendor/` — libsodium and supabase-js, vendored (not CDN-fetched) so the
   PWA shell works offline and doesn't depend on a third party being up.
-- `supabase/migrations/` — schema (`0001_init.sql`) and RLS (`0002_rls.sql`).
+- `supabase/migrations/` — schema (`0001_init.sql`), RLS (`0002_rls.sql`),
+  v2 features: pin/mute, edit/unsend, read receipts, push (`0003_v2_features.sql`).
+- `supabase/functions/notify-message/` — Edge Function that sends the actual
+  push notifications, triggered by a database trigger on message insert.
 - `scripts/invite-user.mjs` — the only way to create an account; local-only.
 
 ## Verifying the E2E guarantee yourself

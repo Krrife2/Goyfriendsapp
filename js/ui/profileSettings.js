@@ -10,6 +10,7 @@ import {
   disableLocalUnlock,
   signOut,
 } from '../auth.js';
+import { isPushSupported, isPushEnabled, enablePush, disablePush } from '../push.js';
 
 export function renderProfileSettings(modalRoot, ctx) {
   const { user, myProfile, onClose, onProfileUpdated, onSignedOut } = ctx;
@@ -43,6 +44,32 @@ export function renderProfileSettings(modalRoot, ctx) {
     class: 'field-label',
     text: isLocalUnlockEnrolled() ? 'Quick unlock is on for this device' : 'Quick unlock is off',
   });
+
+  const pushStatus = el('span', { class: 'field-label', text: 'Checking…' });
+  const pushButton = el('button', { class: 'secondary-button', text: 'Checking…' });
+  if (isPushSupported()) {
+    isPushEnabled().then((enabled) => {
+      pushStatus.textContent = enabled ? 'Notifications are on for this device' : 'Notifications are off';
+      pushButton.textContent = enabled ? 'Turn off notifications' : 'Turn on notifications';
+      pushButton.onclick = async () => {
+        pushButton.disabled = true;
+        try {
+          if (await isPushEnabled()) await disablePush();
+          else await enablePush(user.id);
+        } catch (err) {
+          pushStatus.textContent = 'Error: ' + err.message;
+        }
+        const nowEnabled = await isPushEnabled();
+        pushStatus.textContent = nowEnabled ? 'Notifications are on for this device' : 'Notifications are off';
+        pushButton.textContent = nowEnabled ? 'Turn off notifications' : 'Turn on notifications';
+        pushButton.disabled = false;
+      };
+    });
+  }
+
+  const readReceiptsToggle = el('input', { type: 'checkbox' });
+  readReceiptsToggle.checked = !!myProfile.read_receipts_enabled;
+  const readReceiptsStatus = el('span', { class: 'field-label' });
 
   const backdrop = el(
     'div',
@@ -128,6 +155,35 @@ export function renderProfileSettings(modalRoot, ctx) {
           text: 'Restore',
         }),
         importStatus,
+
+        el('hr', { style: 'border-color:var(--border);width:100%' }),
+        el('span', { class: 'field-label', text: 'Notifications' }),
+        pushStatus,
+        isPushSupported() ? pushButton : el('span', { class: 'field-label', text: 'Not supported on this browser/device.' }),
+
+        el('hr', { style: 'border-color:var(--border);width:100%' }),
+        el('div', { style: 'display:flex;align-items:center;gap:8px' }, [
+          readReceiptsToggle,
+          el('span', { class: 'field-label', text: 'Send read receipts (off by default)' }),
+        ]),
+        el('p', {
+          class: 'security-note',
+          text: 'When on, people you message can see when you’ve read their messages. Off by default — nobody sees this unless you turn it on.',
+        }),
+        el('button', {
+          class: 'secondary-button',
+          onclick: async () => {
+            try {
+              const updated = await updateMyProfile(user.id, { readReceiptsEnabled: readReceiptsToggle.checked });
+              readReceiptsStatus.textContent = 'Saved.';
+              onProfileUpdated(updated);
+            } catch (err) {
+              readReceiptsStatus.textContent = 'Error: ' + err.message;
+            }
+          },
+          text: 'Save',
+        }),
+        readReceiptsStatus,
 
         el('hr', { style: 'border-color:var(--border);width:100%' }),
         el('span', { class: 'field-label', text: 'Quick unlock' }),

@@ -31,10 +31,11 @@ export async function createMyProfile({ id, displayName, avatarPath, publicKeyB6
   return data;
 }
 
-export async function updateMyProfile(userId, { displayName, avatarPath }) {
+export async function updateMyProfile(userId, { displayName, avatarPath, readReceiptsEnabled }) {
   const patch = { updated_at: new Date().toISOString() };
   if (displayName !== undefined) patch.display_name = displayName;
   if (avatarPath !== undefined) patch.avatar_path = avatarPath;
+  if (readReceiptsEnabled !== undefined) patch.read_receipts_enabled = readReceiptsEnabled;
   const { data, error } = await sb.from('profiles').update(patch).eq('id', userId).select().single();
   if (error) throw error;
   return data;

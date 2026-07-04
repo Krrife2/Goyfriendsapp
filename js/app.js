@@ -9,6 +9,8 @@ import {
   createConversation,
   renameConversation,
   updateConversationPhoto,
+  setConversationPinned,
+  setConversationMuted,
 } from './db/conversations.js';
 import {
   fetchMessages,
@@ -19,9 +21,14 @@ import {
   fetchReactions,
   addReaction,
   removeReaction,
+  fetchReads,
+  markMessagesRead,
+  editMessage,
+  unsendMessage,
 } from './db/messages.js';
 import { uploadEncryptedAttachment, downloadEncryptedAttachment, uploadGroupPhoto } from './db/storage.js';
 import { startRealtime } from './realtime.js';
+import { joinTypingChannel } from './typing.js';
 import { sb } from './supabaseClient.js';
 import { renderOnboarding } from './ui/onboarding.js';
 import { renderConversationList } from './ui/conversationList.js';
@@ -42,8 +49,11 @@ const state = {
   activeConversationId: null,
   messagesByConversation: new Map(),
   reactionsByMessageId: new Map(),
+  readsByMessageId: new Map(),
   replyTarget: null,
   stopRealtime: null,
+  typingChannel: null,
+  typingUserIds: new Set(),
 };
 
 // Persistent layout nodes, created once on entering the main app, so a modal
@@ -57,6 +67,11 @@ let modalRootEl = null;
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').catch(() => {
     // Offline shell just won't be available this session — not fatal.
+  });
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    if (event.data?.type === 'open-conversation' && event.data.conversationId) {
+      openConversation(event.data.conversationId);
+    }
   });
 }
 
@@ -83,7 +98,7 @@ function renderLoginScreen() {
   const statusEl = el('p', {});
   appRoot.appendChild(
     el('div', { class: 'centered-screen' }, [
-      el('h1', { text: 'Goyfriends' }),
+      el('h1', { text: 'Goyfriends 🐸' }),
       el('p', { text: "Enter the email you were invited with, and we'll send you a sign-in link." }),
       emailInput,
       el('button', {
@@ -133,6 +148,15 @@ async function proceedIntoApp() {
   state.identity = await loadIdentity(state.user.id);
   initMainLayout();
   await refreshConversationList();
+
+  // A notification tap that had to open a fresh window (no existing tab to
+  // focus) lands here with ?conversation=<id> instead of a postMessage.
+  const params = new URLSearchParams(location.search);
+  const conversationId = params.get('conversation');
+  if (conversationId) {
+    history.replaceState(null, '', '/');
+    openConversation(conversationId);
+  }
 }
 
 function renderLockScreen() {
@@ -149,7 +173,7 @@ function renderLockScreen() {
   };
   appRoot.appendChild(
     el('div', { class: 'lock-screen' }, [
-      el('h1', { text: 'Goyfriends is locked' }),
+      el('h1', { text: 'The pond is locked 🐸' }),
       el('button', { class: 'primary-button', onclick: attempt, text: 'Unlock' }),
       statusEl,
       el('button', {
@@ -258,8 +282,10 @@ function renderAll() {
     myUserId: state.user.id,
     messages: state.messagesByConversation.get(state.activeConversationId) || [],
     reactionsByMessageId: state.reactionsByMessageId,
+    readsByMessageId: state.readsByMessageId,
     profilesById: state.profilesById,
     onBack: () => {
+      leaveTypingChannel();
       state.activeConversationId = null;
       renderAll();
     },
@@ -276,8 +302,18 @@ function renderAll() {
       renderAll();
     },
     onReact: reactToMessage,
+    onEditMessage: editMessageAction,
+    onUnsendMessage: unsendMessageAction,
     getAttachmentUrl,
+    typingUserIds: state.typingUserIds,
+    onTyping: (isTyping) => state.typingChannel && state.typingChannel.sendTyping(isTyping),
   });
+}
+
+function leaveTypingChannel() {
+  if (state.typingChannel) state.typingChannel.leave();
+  state.typingChannel = null;
+  state.typingUserIds = new Set();
 }
 
 async function refreshConversationList() {
@@ -306,9 +342,22 @@ async function refreshConversationList() {
       }
     }
 
-    enriched.push({ ...conversation, membersProfiles: members, previewText });
+    const myMembership = conversation.conversation_members.find((m) => m.user_id === state.user.id);
+    enriched.push({
+      ...conversation,
+      membersProfiles: members,
+      previewText,
+      pinned_at: myMembership?.pinned_at || null,
+      muted: myMembership?.muted || false,
+    });
   }
-  enriched.sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+  // Pinned conversations first (most-recently-pinned first), then everyone
+  // else ordered by last activity — matches iMessage's pin behavior.
+  enriched.sort((a, b) => {
+    if (!!a.pinned_at !== !!b.pinned_at) return a.pinned_at ? -1 : 1;
+    if (a.pinned_at && b.pinned_at) return new Date(b.pinned_at) - new Date(a.pinned_at);
+    return new Date(b.updated_at) - new Date(a.updated_at);
+  });
   state.conversations = enriched;
 
   if (!state.profilesById.has(state.myProfile.id)) state.profilesById.set(state.myProfile.id, state.myProfile);
@@ -335,7 +384,8 @@ async function refreshActiveThread() {
   );
   state.messagesByConversation.set(state.activeConversationId, decrypted);
 
-  const reactions = await fetchReactions(decrypted.map((m) => m.id));
+  const messageIds = decrypted.map((m) => m.id);
+  const reactions = await fetchReactions(messageIds);
   const grouped = new Map();
   for (const reaction of reactions) {
     if (!grouped.has(reaction.message_id)) grouped.set(reaction.message_id, []);
@@ -343,12 +393,35 @@ async function refreshActiveThread() {
   }
   state.reactionsByMessageId = grouped;
 
+  const reads = await fetchReads(messageIds);
+  const readsGrouped = new Map();
+  for (const read of reads) {
+    if (!readsGrouped.has(read.message_id)) readsGrouped.set(read.message_id, []);
+    readsGrouped.get(read.message_id).push(read);
+  }
+  state.readsByMessageId = readsGrouped;
+
+  // Opt-in only: never mark anything read unless this user turned it on themselves.
+  if (state.myProfile.read_receipts_enabled) {
+    const unread = decrypted
+      .filter((m) => m.sender !== state.user.id)
+      .filter((m) => !(readsGrouped.get(m.id) || []).some((r) => r.user_id === state.user.id))
+      .map((m) => m.id);
+    if (unread.length > 0) markMessagesRead(unread, state.user.id).catch(() => {});
+  }
+
   renderAll();
 }
 
 async function openConversation(conversationId) {
+  if (conversationId === state.activeConversationId) return;
+  leaveTypingChannel();
   state.activeConversationId = conversationId;
   state.replyTarget = null;
+  state.typingChannel = joinTypingChannel(conversationId, state.user.id, (typingUserIds) => {
+    state.typingUserIds = typingUserIds;
+    renderAll();
+  });
   renderAll();
   await refreshActiveThread();
 }
@@ -390,6 +463,19 @@ async function reactToMessage(messageId, emoji) {
   await refreshActiveThread();
 }
 
+async function editMessageAction(messageId, newText) {
+  const symKey = getCachedConversationKey(state.activeConversationId);
+  if (!symKey) return;
+  await editMessage(messageId, symKey, newText);
+  await refreshActiveThread();
+}
+
+async function unsendMessageAction(messageId) {
+  await unsendMessage(messageId);
+  await refreshActiveThread();
+  await refreshConversationList();
+}
+
 function openNewConversationModal() {
   const otherProfiles = Array.from(state.profilesById.values()).filter((p) => p.id !== state.user.id);
   renderNewConversationModal(modalRootEl, {
@@ -416,6 +502,14 @@ function openGroupInfo(conversation) {
     onChangePhoto: async (file) => {
       const path = await uploadGroupPhoto(conversation.id, file);
       await updateConversationPhoto(conversation.id, path);
+      await refreshConversationList();
+    },
+    onTogglePin: async () => {
+      await setConversationPinned(conversation.id, state.user.id, !conversation.pinned_at);
+      await refreshConversationList();
+    },
+    onToggleMute: async () => {
+      await setConversationMuted(conversation.id, state.user.id, !conversation.muted);
       await refreshConversationList();
     },
     onLeave: async () => {

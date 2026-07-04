@@ -2,7 +2,7 @@
 // different origin entirely, so it's never intercepted here) and never
 // caches decrypted message content, since messages are rendered straight
 // into the DOM and never round-trip through a fetch this worker sees.
-const CACHE_VERSION = 'goyfriends-shell-v1';
+const CACHE_VERSION = 'goyfriends-shell-v2';
 const PRECACHE_URLS = [
   '/',
   '/index.html',
@@ -12,6 +12,7 @@ const PRECACHE_URLS = [
   '/js/config.js',
   '/js/supabaseClient.js',
   '/js/auth.js',
+  '/js/push.js',
   '/js/realtime.js',
   '/js/crypto/sodium.js',
   '/js/crypto/keys.js',
@@ -69,6 +70,39 @@ self.addEventListener('fetch', (event) => {
         }
         return response;
       });
+    })
+  );
+});
+
+// Push previews are always generic (see notify-message Edge Function) — the
+// server never has the E2E key, so it can never put message content in here.
+self.addEventListener('push', (event) => {
+  if (!event.data) return;
+  const { title, body, conversationId } = event.data.json();
+  event.waitUntil(
+    self.registration.showNotification(title || 'Goyfriends', {
+      body: body || 'New message',
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      data: { conversationId },
+      tag: conversationId || 'goyfriends',
+    })
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const conversationId = event.notification.data?.conversationId;
+  const targetUrl = conversationId ? `/?conversation=${conversationId}` : '/';
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if ('focus' in client) {
+          client.postMessage({ type: 'open-conversation', conversationId });
+          return client.focus();
+        }
+      }
+      return clients.openWindow(targetUrl);
     })
   );
 });

@@ -1,12 +1,12 @@
 {
-  "name": "Goyfriends",
+  "name": "Goyfriends 🐸",
   "short_name": "Goyfriends",
-  "description": "A small, end-to-end encrypted group chat for friends.",
+  "description": "A small, end-to-end encrypted pond for friends.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#0b0b0f",
-  "theme_color": "#0b0b0f",
+  "background_color": "#0a1710",
+  "theme_color": "#0a1710",
   "icons": [
     { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
     { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" }

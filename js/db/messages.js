@@ -97,6 +97,26 @@ export async function sendAttachmentMessage({ conversationId, senderId, symKey, 
   return data;
 }
 
+// Re-encrypts new content under the same conversation key and marks the row
+// edited. RLS restricts this to the original sender.
+export async function editMessage(messageId, symKey, newPlaintext) {
+  const { ciphertext, nonce } = await encryptMessage(newPlaintext, symKey);
+  const { error } = await sb
+    .from('messages')
+    .update({ ciphertext, nonce, edited_at: new Date().toISOString() })
+    .eq('id', messageId);
+  if (error) throw error;
+}
+
+// Soft delete/unsend: the ciphertext column stays not-null (schema
+// constraint) and is simply never rendered once deleted_at is set — the
+// client treats it as a "message removed" placeholder rather than decrypting
+// it. RLS restricts this to the original sender.
+export async function unsendMessage(messageId) {
+  const { error } = await sb.from('messages').update({ deleted_at: new Date().toISOString() }).eq('id', messageId);
+  if (error) throw error;
+}
+
 export async function fetchReactions(messageIds) {
   if (messageIds.length === 0) return [];
   const { data, error } = await sb.from('message_reactions').select('*').in('message_id', messageIds);
@@ -116,5 +136,21 @@ export async function removeReaction(messageId, userId, emoji) {
     .eq('message_id', messageId)
     .eq('user_id', userId)
     .eq('emoji', emoji);
+  if (error) throw error;
+}
+
+// Read receipts are opt-in (profiles.read_receipts_enabled, default off) —
+// callers should only invoke markMessagesRead for a user who has it turned on.
+export async function fetchReads(messageIds) {
+  if (messageIds.length === 0) return [];
+  const { data, error } = await sb.from('message_reads').select('*').in('message_id', messageIds);
+  if (error) throw error;
+  return data;
+}
+
+export async function markMessagesRead(messageIds, userId) {
+  if (messageIds.length === 0) return;
+  const rows = messageIds.map((messageId) => ({ message_id: messageId, user_id: userId }));
+  const { error } = await sb.from('message_reads').upsert(rows, { onConflict: 'message_id,user_id', ignoreDuplicates: true });
   if (error) throw error;
 }

@@ -20,6 +20,7 @@ export function renderThreadView(container, ctx) {
     myUserId,
     messages,
     reactionsByMessageId,
+    readsByMessageId,
     profilesById,
     onBack,
     onOpenGroupInfo,
@@ -29,13 +30,17 @@ export function renderThreadView(container, ctx) {
     onSetReplyTarget,
     onCancelReply,
     onReact,
+    onEditMessage,
+    onUnsendMessage,
     getAttachmentUrl,
+    typingUserIds,
+    onTyping,
   } = ctx;
 
   clear(container);
 
   if (!conversation) {
-    container.appendChild(el('div', { class: 'thread-empty', text: 'Select a conversation, or start a new one.' }));
+    container.appendChild(el('div', { class: 'thread-empty', text: 'Pick a pond, or start a new one. 🐸' }));
     return;
   }
 
@@ -62,6 +67,15 @@ export function renderThreadView(container, ctx) {
   const showSenderLabels = conversation.is_group;
   let lastSenderId = null;
 
+  // iMessage-style: only show "Read" under the single most recent own message
+  // someone else has read, not on every read message.
+  let lastReadOwnMessageId = null;
+  for (const message of messages) {
+    if (message.sender !== myUserId) continue;
+    const reads = (readsByMessageId && readsByMessageId.get(message.id)) || [];
+    if (reads.some((r) => r.user_id !== myUserId)) lastReadOwnMessageId = message.id;
+  }
+
   for (const message of messages) {
     const isSelf = message.sender === myUserId;
     const senderProfile = profilesById.get(message.sender);
@@ -77,7 +91,10 @@ export function renderThreadView(container, ctx) {
 
     const bubble = el('div', { class: 'bubble' });
 
-    if (message.decryptFailed) {
+    if (message.deleted_at) {
+      bubble.classList.add('decrypt-error');
+      bubble.textContent = 'This message was removed.';
+    } else if (message.decryptFailed) {
       bubble.classList.add('decrypt-error');
       bubble.textContent = 'Could not decrypt this message on this device.';
     } else {
@@ -95,11 +112,26 @@ export function renderThreadView(container, ctx) {
       }
     }
 
-    bubble.addEventListener('dblclick', (e) => {
-      e.stopPropagation();
-      openReactionPicker(bubble, message, onReact);
-    });
+    if (!message.deleted_at) {
+      bubble.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        openReactionPicker(bubble, message, onReact);
+      });
+    }
     row.appendChild(bubble);
+
+    if (isSelf && !message.deleted_at) {
+      const optionsButton = el('button', {
+        class: 'text-button',
+        style: 'font-size:11px;padding:0;align-self:flex-end;',
+        onclick: (e) => {
+          e.stopPropagation();
+          openMessageOptionsMenu(optionsButton, message, onEditMessage, onUnsendMessage);
+        },
+        text: '⋯',
+      });
+      row.appendChild(optionsButton);
+    }
 
     const reactions = reactionsByMessageId.get(message.id) || [];
     if (reactions.length > 0) {
@@ -112,23 +144,38 @@ export function renderThreadView(container, ctx) {
       row.appendChild(reactionsEl);
     }
 
-    row.appendChild(el('div', { class: 'bubble-timestamp', text: formatTime(message.created_at) }));
+    const timestampText = message.edited_at && !message.deleted_at
+      ? `${formatTime(message.created_at)} · Edited`
+      : formatTime(message.created_at);
+    row.appendChild(el('div', { class: 'bubble-timestamp', text: timestampText }));
+    if (message.id === lastReadOwnMessageId) {
+      row.appendChild(el('div', { class: 'bubble-timestamp', text: 'Read' }));
+    }
 
-    row.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      onSetReplyTarget({ id: message.id, previewText: message.decryptFailed ? '(undecryptable)' : message.body });
-    });
+    if (!message.deleted_at) {
+      row.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        onSetReplyTarget({ id: message.id, previewText: message.decryptFailed ? '(undecryptable)' : message.body });
+      });
+    }
 
     listEl.appendChild(row);
   }
 
   listEl.scrollTop = listEl.scrollHeight;
 
+  if (typingUserIds && typingUserIds.size > 0) {
+    const names = [...typingUserIds].map((id) => profilesById.get(id)?.display_name || 'Someone');
+    const label = names.length === 1 ? `${names[0]} is typing…` : `${names.join(', ')} are typing…`;
+    container.appendChild(el('div', { class: 'typing-indicator', text: label }));
+  }
+
   const composerContainer = el('div');
   container.appendChild(composerContainer);
   renderComposer(composerContainer, {
     replyTarget,
     onCancelReply,
+    onTyping,
     onSendText: (text) => onSendText(text, replyTarget?.id || null),
     onSendFile: (file) => onSendFile(file, replyTarget?.id || null),
   });
@@ -165,6 +212,47 @@ function renderAttachment(message, getAttachmentUrl) {
     a.click();
   });
   return link;
+}
+
+function openMessageOptionsMenu(anchorEl, message, onEditMessage, onUnsendMessage) {
+  closeAnyOpenReactionPicker();
+  const rect = anchorEl.getBoundingClientRect();
+  const popup = el('div', {
+    class: 'reaction-picker-popup',
+    style: `position:fixed;top:${rect.top - 76}px;left:${rect.left}px;background:var(--panel-bg);border:1px solid var(--border);border-radius:12px;padding:6px;display:flex;flex-direction:column;gap:2px;z-index:100;min-width:110px;`,
+  });
+  popup.appendChild(
+    el('button', {
+      class: 'text-button',
+      style: 'text-align:left;padding:6px 8px;',
+      onclick: () => {
+        popup.remove();
+        const newText = prompt('Edit message', message.body);
+        if (newText != null && newText.trim() && newText.trim() !== message.body) {
+          onEditMessage(message.id, newText.trim());
+        }
+      },
+      text: 'Edit',
+    })
+  );
+  popup.appendChild(
+    el('button', {
+      class: 'text-button',
+      style: 'text-align:left;padding:6px 8px;color:var(--danger);',
+      onclick: () => {
+        popup.remove();
+        if (confirm('Unsend this message for everyone?')) onUnsendMessage(message.id);
+      },
+      text: 'Unsend',
+    })
+  );
+  document.body.appendChild(popup);
+  setTimeout(() => {
+    document.addEventListener('click', function handler() {
+      popup.remove();
+      document.removeEventListener('click', handler);
+    });
+  }, 0);
 }
 
 function openReactionPicker(anchorEl, message, onReact) {

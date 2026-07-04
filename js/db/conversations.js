@@ -4,12 +4,32 @@ import { createConversationKey, wrapKeyForMember } from '../crypto/conversationK
 
 export async function listMyConversations() {
   // conversation_members RLS already restricts this to the caller's own memberships.
+  // pinned_at/muted come back for every member's row; the caller picks out
+  // their own row by user_id to know their own pin/mute state.
   const { data, error } = await sb
     .from('conversations')
-    .select('*, conversation_members(user_id)')
+    .select('*, conversation_members(user_id, pinned_at, muted)')
     .order('updated_at', { ascending: false });
   if (error) throw error;
   return data;
+}
+
+export async function setConversationPinned(conversationId, userId, pinned) {
+  const { error } = await sb
+    .from('conversation_members')
+    .update({ pinned_at: pinned ? new Date().toISOString() : null })
+    .eq('conversation_id', conversationId)
+    .eq('user_id', userId);
+  if (error) throw error;
+}
+
+export async function setConversationMuted(conversationId, userId, muted) {
+  const { error } = await sb
+    .from('conversation_members')
+    .update({ muted })
+    .eq('conversation_id', conversationId)
+    .eq('user_id', userId);
+  if (error) throw error;
 }
 
 export async function getConversationMembers(conversationId) {

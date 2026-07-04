@@ -4,7 +4,7 @@ import { el, clear } from './dom.js';
 // caller (app.js) owns encryption/upload/db-insert, since it holds the
 // conversation's symmetric key and sender id.
 export function renderComposer(container, ctx) {
-  const { replyTarget, onSendText, onSendFile, onCancelReply } = ctx;
+  const { replyTarget, onSendText, onSendFile, onCancelReply, onTyping } = ctx;
   clear(container);
 
   if (replyTarget) {
@@ -18,8 +18,9 @@ export function renderComposer(container, ctx) {
 
   const textarea = el('textarea', {
     class: 'composer-input',
-    placeholder: 'iMessage',
+    placeholder: 'Ribbit…',
     rows: '1',
+    oninput: () => onTyping && onTyping(textarea.value.length > 0),
     onkeydown: (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -43,6 +44,7 @@ export function renderComposer(container, ctx) {
     if (!text) return;
     onSendText(text);
     textarea.value = '';
+    onTyping && onTyping(false);
   }
 
   const bar = el('div', { class: 'composer-bar' }, [

@@ -3,9 +3,11 @@ import { generateIdentity, exportBackup } from '../crypto/keys.js';
 import { createMyProfile } from '../db/profiles.js';
 import { uploadUserAvatar } from '../db/storage.js';
 import { enrollLocalUnlock, isWebAuthnAvailable } from '../auth.js';
+import { isPushSupported, enablePush } from '../push.js';
 
 // First-login setup wizard: profile (name/avatar) -> key generation ->
-// optional key backup -> optional WebAuthn local unlock -> done.
+// optional key backup -> optional WebAuthn local unlock -> optional push
+// notifications -> done.
 export function renderOnboarding(container, { user, onComplete }) {
   let step = 'profile';
   let pendingAvatarFile = null;
@@ -17,6 +19,7 @@ export function renderOnboarding(container, { user, onComplete }) {
     else if (step === 'working') container.appendChild(renderWorkingStep());
     else if (step === 'backup') container.appendChild(renderBackupStep());
     else if (step === 'unlock') container.appendChild(renderUnlockStep());
+    else if (step === 'notifications') container.appendChild(renderNotificationsStep());
   }
 
   function renderProfileStep() {
@@ -40,7 +43,7 @@ export function renderOnboarding(container, { user, onComplete }) {
       autofocus: true,
     });
     return el('div', { class: 'centered-screen' }, [
-      el('h1', { text: 'Welcome to Goyfriends' }),
+      el('h1', { text: 'Welcome to the pond 🐸' }),
       el('p', { text: 'Set up your profile. This name and photo are visible to the group — they are not encrypted, same as any messaging app.' }),
       el('div', { class: 'avatar-picker' }, [
         avatarPreview,
@@ -128,8 +131,8 @@ export function renderOnboarding(container, { user, onComplete }) {
 
   function renderUnlockStep() {
     if (!isWebAuthnAvailable()) {
-      onComplete();
-      return el('div');
+      step = 'notifications';
+      return renderNotificationsStep();
     }
     return el('div', { class: 'centered-screen' }, [
       el('h1', { text: 'Enable quick unlock' }),
@@ -142,10 +145,38 @@ export function renderOnboarding(container, { user, onComplete }) {
           } catch {
             // user cancelled or platform authenticator unavailable — fine, just continue
           }
-          onComplete();
+          step = 'notifications';
+          render();
         },
         text: 'Enable quick unlock',
       }),
+      el('button', { class: 'text-button', onclick: () => { step = 'notifications'; render(); }, text: 'Skip' }),
+    ]);
+  }
+
+  function renderNotificationsStep() {
+    if (!isPushSupported()) {
+      onComplete();
+      return el('div');
+    }
+    const statusEl = el('p', {});
+    return el('div', { class: 'centered-screen' }, [
+      el('h1', { text: 'Turn on notifications' }),
+      el('p', { text: "Get notified when a friend messages you, even when the app isn't open. The notification preview never contains your actual message — it's encrypted, so the server can't read it to show it to you either." }),
+      el('button', {
+        class: 'primary-button',
+        onclick: async () => {
+          try {
+            await enablePush(user.id);
+          } catch (err) {
+            statusEl.textContent = err.message;
+            return;
+          }
+          onComplete();
+        },
+        text: 'Turn on notifications',
+      }),
+      statusEl,
       el('button', { class: 'text-button', onclick: onComplete, text: 'Skip' }),
     ]);
   }

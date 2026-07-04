@@ -3,7 +3,7 @@ import { renderAvatar, invalidateAvatarCache } from './avatar.js';
 
 // Renders into a modal root and returns a close() function.
 export function renderGroupInfoSheet(modalRoot, ctx) {
-  const { conversation, membersProfiles, myUserId, onClose, onRename, onChangePhoto, onLeave } = ctx;
+  const { conversation, membersProfiles, myUserId, onClose, onRename, onChangePhoto, onTogglePin, onToggleMute, onLeave } = ctx;
   clear(modalRoot);
 
   const photoPreview = renderAvatar(conversation.photo_path, conversation.title || 'Group', '');
@@ -54,6 +54,26 @@ export function renderGroupInfoSheet(modalRoot, ctx) {
           : null,
         el('span', { class: 'field-label', text: 'Members' }),
         el('div', {}, memberRows),
+        el('div', { style: 'display:flex;gap:8px' }, [
+          el('button', {
+            class: 'secondary-button',
+            onclick: async (e) => {
+              e.target.disabled = true;
+              await onTogglePin();
+              close();
+            },
+            text: conversation.pinned_at ? 'Unpin' : 'Pin conversation',
+          }),
+          el('button', {
+            class: 'secondary-button',
+            onclick: async (e) => {
+              e.target.disabled = true;
+              await onToggleMute();
+              close();
+            },
+            text: conversation.muted ? 'Unmute' : 'Mute conversation',
+          }),
+        ]),
         el('div', { class: 'modal-actions' }, [
           el('button', { class: 'secondary-button', onclick: onLeave, text: 'Leave conversation' }),
           conversation.is_group
