@@ -1,0 +1,9 @@
+{
+  "name": "goyfriends-scripts",
+  "private": true,
+  "type": "module",
+  "description": "Local-only admin tooling. Never deployed to Netlify — kept out of the root package.json so the static site build never installs or runs it.",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.110.0"
+  }
+}
