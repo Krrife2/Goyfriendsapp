@@ -42,7 +42,10 @@ export async function decryptMessageRow(row, symKey) {
   return { ...row, body, attachmentMeta };
 }
 
-export async function sendMessage({ conversationId, senderId, symKey, plaintext, replyTo }) {
+// effect (e.g. 'slam', 'confetti') is plaintext metadata, like reactions or
+// timestamps -- it controls a bubble/screen animation only, never reveals
+// message content.
+export async function sendMessage({ conversationId, senderId, symKey, plaintext, replyTo, effect }) {
   const { ciphertext, nonce } = await encryptMessage(plaintext, symKey);
   const { data, error } = await sb
     .from('messages')
@@ -52,6 +55,7 @@ export async function sendMessage({ conversationId, senderId, symKey, plaintext,
       ciphertext,
       nonce,
       reply_to: replyTo || null,
+      effect: effect || null,
     })
     .select()
     .single();
@@ -65,11 +69,12 @@ export async function sendMessage({ conversationId, senderId, symKey, plaintext,
   return data;
 }
 
-// attachment is { path, name, type, size } — path already uploaded to Storage
-// by db/storage.js; name/type get encrypted here alongside the message body.
+// attachment is { path, name, type, size, durationMs? } — path already
+// uploaded to Storage by db/storage.js; name/type/duration get encrypted
+// here alongside the message body. durationMs is set for voice messages only.
 export async function sendAttachmentMessage({ conversationId, senderId, symKey, caption, attachment, replyTo }) {
   const { ciphertext, nonce } = await encryptMessage(caption || '', symKey);
-  const metaJson = JSON.stringify({ name: attachment.name, type: attachment.type });
+  const metaJson = JSON.stringify({ name: attachment.name, type: attachment.type, durationMs: attachment.durationMs });
   const nameEnc = await encryptMessage(metaJson, symKey);
 
   const { data, error } = await sb

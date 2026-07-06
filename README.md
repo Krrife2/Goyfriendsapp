@@ -8,7 +8,11 @@ ciphertext.
 Features: bubbles with reply-quotes and tapback reactions, group naming/photos
 (editable by any member), push notifications, typing indicators, opt-in read
 receipts (off by default), message edit/unsend, pinned/muted conversations,
-profile photos/avatars, key backup/restore, WebAuthn quick-unlock.
+profile photos/avatars, key backup/restore, WebAuthn quick-unlock, voice
+messages, and iMessage-style bubble/screen send effects (Slam, Loud, Gentle,
+Invisible Ink, Balloons, Confetti, Love — hold the send button to pick one).
+The composer itself mirrors iMessage: tap send to send, hold send for
+effects, hold the mic to record a voice message, attach is always available.
 
 ## Security model — read this before inviting anyone
 
@@ -31,6 +35,12 @@ metadata):
 - Read receipts, if you turn them on (off by default — see below) and pin/mute state
 - Typing indicators (never stored — a live broadcast only, gone the instant
   everyone leaves the conversation)
+- Which send effect (if any) was chosen for a message — the effect name is
+  metadata about presentation, not content; the message body is still
+  encrypted separately either way
+
+**Voice messages are encrypted exactly like any other attachment** — recorded
+locally, encrypted client-side before upload, same as a photo or file.
 
 **Push notification previews are always generic** — "so-and-so sent a
 message," never the actual text. The server-side function that sends push
@@ -73,7 +83,7 @@ put message content in a notification even if it wanted to.
    - `avatars`
    - `attachments`
 7. SQL Editor — run, in order: `supabase/migrations/0001_init.sql`,
-   `0002_rls.sql`, `0003_v2_features.sql`.
+   `0002_rls.sql`, `0003_v2_features.sql`, `0004_message_effects.sql`.
 8. **Push notifications** — generate a VAPID keypair (any Web Push VAPID
    generator, or Node: `crypto.createECDH('prime256v1')`, base64url-encode
    the public/private keys). Then:

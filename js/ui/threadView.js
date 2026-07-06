@@ -2,6 +2,7 @@ import { el, clear, formatTime } from './dom.js';
 import { renderAvatar } from './avatar.js';
 import { renderComposer } from './composer.js';
 import { displayTitleFor, avatarPathFor } from './conversationList.js';
+import { BUBBLE_EFFECTS, SCREEN_EFFECTS, playScreenEffect, hasPlayedEffect, markEffectPlayed } from '../effects.js';
 
 const QUICK_REACTIONS = ['❤️', '👍', '👎', '😂', '‼️', '❓'];
 const attachmentUrlCache = new Map(); // message.id -> blob URL
@@ -35,6 +36,8 @@ export function renderThreadView(container, ctx) {
     getAttachmentUrl,
     typingUserIds,
     onTyping,
+    onSendVoice,
+    onOpenEffectPicker,
   } = ctx;
 
   clear(container);
@@ -110,6 +113,23 @@ export function renderThreadView(container, ctx) {
       if (message.body) {
         bubble.appendChild(el('div', { text: message.body }));
       }
+
+      if (message.effect) {
+        if (message.effect === 'invisible-ink') {
+          bubble.classList.add('bubble-effect-invisible-ink');
+          bubble.appendChild(el('div', { class: 'invisible-ink-veil' }));
+          bubble.addEventListener('click', (e) => {
+            e.stopPropagation();
+            bubble.classList.toggle('revealed');
+          });
+        } else if (BUBBLE_EFFECTS.includes(message.effect) && !hasPlayedEffect(message.id)) {
+          bubble.classList.add(`bubble-effect-${message.effect}`);
+          markEffectPlayed(message.id);
+        } else if (SCREEN_EFFECTS.includes(message.effect) && !hasPlayedEffect(message.id)) {
+          playScreenEffect(message.effect);
+          markEffectPlayed(message.id);
+        }
+      }
     }
 
     if (!message.deleted_at) {
@@ -178,12 +198,22 @@ export function renderThreadView(container, ctx) {
     onTyping,
     onSendText: (text) => onSendText(text, replyTarget?.id || null),
     onSendFile: (file) => onSendFile(file, replyTarget?.id || null),
+    onSendVoice: (blob, durationMs, replyTo) => onSendVoice && onSendVoice(blob, durationMs, replyTo),
+    onOpenEffectPicker,
   });
+}
+
+function formatDuration(ms) {
+  const totalSeconds = Math.round(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
 function renderAttachment(message, getAttachmentUrl) {
   const meta = message.attachmentMeta || { name: 'file', type: '' };
   const isImage = meta.type && meta.type.startsWith('image/');
+  const isAudio = meta.type && meta.type.startsWith('audio/');
 
   if (isImage) {
     const img = el('img', { class: 'attachment-image', alt: meta.name });
@@ -198,6 +228,26 @@ function renderAttachment(message, getAttachmentUrl) {
       });
     }
     return img;
+  }
+
+  if (isAudio) {
+    const wrapper = el('div', { class: 'attachment-voice' }, [
+      el('span', { text: '🎤' }),
+      el('audio', { controls: true, class: 'attachment-voice-player' }),
+      meta.durationMs ? el('span', { class: 'attachment-voice-duration', text: formatDuration(meta.durationMs) }) : null,
+    ]);
+    const audioEl = wrapper.querySelector('audio');
+    const cached = attachmentUrlCache.get(message.id);
+    if (cached) {
+      audioEl.src = cached;
+    } else {
+      getAttachmentUrl(message).then((url) => {
+        if (!url) return;
+        attachmentUrlCache.set(message.id, url);
+        audioEl.src = url;
+      });
+    }
+    return wrapper;
   }
 
   const link = el('span', { class: 'attachment-file', text: `📄 ${meta.name}` });

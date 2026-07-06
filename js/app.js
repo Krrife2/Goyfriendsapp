@@ -36,6 +36,8 @@ import { renderThreadView } from './ui/threadView.js';
 import { renderGroupInfoSheet } from './ui/groupInfoSheet.js';
 import { renderProfileSettings } from './ui/profileSettings.js';
 import { renderNewConversationModal } from './ui/newConversationModal.js';
+import { renderEffectPicker } from './ui/effectPicker.js';
+import { SCREEN_EFFECTS, playScreenEffect, markEffectPlayed } from './effects.js';
 import { el, clear } from './ui/dom.js';
 
 const appRoot = document.getElementById('app');
@@ -292,6 +294,8 @@ function renderAll() {
     onOpenGroupInfo: () => activeConversation && openGroupInfo(activeConversation),
     onSendText: sendTextMessage,
     onSendFile: sendFileMessage,
+    onSendVoice: sendVoiceMessage,
+    onOpenEffectPicker: openEffectPicker,
     replyTarget: state.replyTarget,
     onSetReplyTarget: (target) => {
       state.replyTarget = target;
@@ -426,14 +430,31 @@ async function openConversation(conversationId) {
   await refreshActiveThread();
 }
 
-async function sendTextMessage(text, replyTo) {
+async function sendTextMessage(text, replyTo, effect) {
   const conversationId = state.activeConversationId;
   const symKey = getCachedConversationKey(conversationId);
   if (!symKey) return;
   state.replyTarget = null;
-  await sendMessage({ conversationId, senderId: state.user.id, symKey, plaintext: text, replyTo });
+  const sentRow = await sendMessage({ conversationId, senderId: state.user.id, symKey, plaintext: text, replyTo, effect });
+  // The sender sees their own screen effect play immediately, same as iMessage.
+  // Mark it played up front so the refreshActiveThread below doesn't fire it again.
+  if (effect) {
+    markEffectPlayed(sentRow.id);
+    if (SCREEN_EFFECTS.includes(effect)) playScreenEffect(effect);
+  }
   await refreshActiveThread();
   await refreshConversationList();
+}
+
+function openEffectPicker(text, replyTo, onSent) {
+  renderEffectPicker(modalRootEl, {
+    text,
+    onPick: async (effectName) => {
+      await sendTextMessage(text, replyTo, effectName);
+      onSent();
+    },
+    onClose: () => {},
+  });
 }
 
 async function sendFileMessage(file, replyTo) {
@@ -442,6 +463,25 @@ async function sendFileMessage(file, replyTo) {
   if (!symKey) return;
   state.replyTarget = null;
   const attachment = await uploadEncryptedAttachment(conversationId, file, symKey);
+  await sendAttachmentMessage({ conversationId, senderId: state.user.id, symKey, caption: '', attachment, replyTo });
+  await refreshActiveThread();
+  await refreshConversationList();
+}
+
+function extensionForMimeType(mimeType) {
+  if (mimeType.includes('mp4')) return 'm4a';
+  if (mimeType.includes('ogg')) return 'ogg';
+  return 'webm';
+}
+
+async function sendVoiceMessage(blob, durationMs, replyTo) {
+  const conversationId = state.activeConversationId;
+  const symKey = getCachedConversationKey(conversationId);
+  if (!symKey) return;
+  state.replyTarget = null;
+  const file = new File([blob], `Voice Message.${extensionForMimeType(blob.type)}`, { type: blob.type });
+  const attachment = await uploadEncryptedAttachment(conversationId, file, symKey);
+  attachment.durationMs = durationMs;
   await sendAttachmentMessage({ conversationId, senderId: state.user.id, symKey, caption: '', attachment, replyTo });
   await refreshActiveThread();
   await refreshConversationList();
