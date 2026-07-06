@@ -67,9 +67,28 @@ let threadPaneEl = null;
 let modalRootEl = null;
 
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').catch(() => {
-    // Offline shell just won't be available this session — not fatal.
+  navigator.serviceWorker
+    .register('/sw.js')
+    .then((registration) => {
+      // Don't wait for the browser's own update-check schedule — installed
+      // "Add to Home Screen" apps on iOS are especially slow to notice a new
+      // sw.js on their own, so ask explicitly every time the app opens.
+      registration.update().catch(() => {});
+    })
+    .catch(() => {
+      // Offline shell just won't be available this session — not fatal.
+    });
+
+  // Once a new service worker actually takes over, reload once so the page
+  // picks up the fresh app.js/css/etc. it just activated, instead of the
+  // user having to notice and force-quit/reopen themselves.
+  let reloadedForUpdate = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloadedForUpdate) return;
+    reloadedForUpdate = true;
+    location.reload();
   });
+
   navigator.serviceWorker.addEventListener('message', (event) => {
     if (event.data?.type === 'open-conversation' && event.data.conversationId) {
       openConversation(event.data.conversationId);

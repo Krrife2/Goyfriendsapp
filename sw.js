@@ -1,8 +1,15 @@
-// PWA app-shell caching only — never caches anything from Supabase (a
-// different origin entirely, so it's never intercepted here) and never
-// caches decrypted message content, since messages are rendered straight
-// into the DOM and never round-trip through a fetch this worker sees.
-const CACHE_VERSION = 'goyfriends-shell-v2';
+// PWA app-shell caching, OFFLINE-FALLBACK ONLY — never caches anything from
+// Supabase (a different origin entirely, so it's never intercepted here) and
+// never caches decrypted message content, since messages are rendered
+// straight into the DOM and never round-trip through a fetch this worker sees.
+//
+// IMPORTANT: bump CACHE_VERSION on every deploy that changes any cached file.
+// The browser only re-installs this worker (and re-precaches) when this
+// file's bytes change — an unchanged version number here means installed
+// devices (especially "Add to Home Screen" on iOS, which is stickier about
+// this than a regular browser tab) can keep serving old JS/CSS indefinitely,
+// even after a force-quit and relaunch.
+const CACHE_VERSION = 'goyfriends-shell-v3';
 const PRECACHE_URLS = [
   '/',
   '/index.html',
@@ -13,7 +20,10 @@ const PRECACHE_URLS = [
   '/js/supabaseClient.js',
   '/js/auth.js',
   '/js/push.js',
+  '/js/voice.js',
+  '/js/effects.js',
   '/js/realtime.js',
+  '/js/typing.js',
   '/js/crypto/sodium.js',
   '/js/crypto/keys.js',
   '/js/crypto/conversationKeys.js',
@@ -32,6 +42,7 @@ const PRECACHE_URLS = [
   '/js/ui/groupInfoSheet.js',
   '/js/ui/profileSettings.js',
   '/js/ui/newConversationModal.js',
+  '/js/ui/effectPicker.js',
   '/js/vendor/libsodium.js',
   '/js/vendor/libsodium-wrappers.js',
   '/js/vendor/supabase.js',
@@ -60,17 +71,21 @@ self.addEventListener('fetch', (event) => {
   // (Supabase API/Storage/Realtime, non-GET requests) passes straight through.
   if (event.request.method !== 'GET' || url.origin !== self.location.origin) return;
 
+  // Network-first, cache as a fallback for offline only. A cache-first
+  // strategy here previously meant online users could keep being served
+  // stale JS/CSS indefinitely until CACHE_VERSION changed — this way, being
+  // online always gets the latest deployed code, and the cache only ever
+  // kicks in when the network request actually fails.
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) return cached;
-      return fetch(event.request).then((response) => {
+    fetch(event.request)
+      .then((response) => {
         if (response.ok) {
           const copy = response.clone();
           caches.open(CACHE_VERSION).then((cache) => cache.put(event.request, copy));
         }
         return response;
-      });
-    })
+      })
+      .catch(() => caches.match(event.request))
   );
 });
 
